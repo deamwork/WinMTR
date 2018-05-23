@@ -51,7 +51,7 @@ WinMTRNet::WinMTRNet(WinMTRDialog* wp)
 	initialized = false;
 	wmtrdlg = wp;
 	WSADATA wsaData;
-	
+
 	if(WSAStartup(MAKEWORD(2, 2), &wsaData)) {
 		AfxMessageBox("Failed initializing windows sockets library!");
 		return;
@@ -75,7 +75,7 @@ WinMTRNet::WinMTRNet(WinMTRDialog* wp)
 			return;
 		}
 	}
-	
+
 	/*
 	 * Get pointers to ICMP.DLL functions
 	 */
@@ -95,7 +95,7 @@ WinMTRNet::WinMTRNet(WinMTRDialog* wp)
 		AfxMessageBox("IPv6 support not found!");
 		return;//@todo : soft fail
 	}
-	
+
 	/*
 	 * IcmpCreateFile() - Open the ping service
 	 */
@@ -111,9 +111,9 @@ WinMTRNet::WinMTRNet(WinMTRDialog* wp)
 			return;//@todo : soft fail
 		}
 	}
-	
+
 	ResetHops();
-	
+
 	initialized = true;
 	return;
 }
@@ -126,12 +126,12 @@ WinMTRNet::~WinMTRNet()
 		 */
 		if(hasIPv6) lpfnIcmpCloseHandle(hICMP6);
 		lpfnIcmpCloseHandle(hICMP);
-		
+
 		// Shut down...
 		FreeLibrary(hICMP_DLL);
-		
+
 		WSACleanup();
-		
+
 		CloseHandle(ghMutex);
 	}
 }
@@ -186,7 +186,7 @@ unsigned WINAPI TraceThread(void* p)
 	trace_thread* current = (trace_thread*)p;
 	WinMTRNet* wmtrnet = current->winmtr;
 	TRACE_MSG("Thread with TTL=" << (int)current->ttl << " started.");
-	
+
 	IPINFO			stIPInfo, *lpstIPInfo;
 	char			achReqData[8192];
 	WORD			nDataLen = wmtrnet->wmtrdlg->pingsize;
@@ -194,7 +194,7 @@ unsigned WINAPI TraceThread(void* p)
 		ICMP_ECHO_REPLY icmp_echo_reply;
 		char achRepData[sizeof(ICMPECHO)+8192];
 	};
-	
+
 	lpstIPInfo				= &stIPInfo;
 	stIPInfo.Ttl			= (UCHAR)current->ttl;
 	stIPInfo.Tos			= 0;
@@ -250,7 +250,7 @@ unsigned WINAPI TraceThread6(void* p)
 	trace_thread6* current = (trace_thread6*)p;
 	WinMTRNet* wmtrnet = current->winmtr;
 	TRACE_MSG("Thread with TTL=" << (int)current->ttl << " started.");
-	
+
 	IPINFO			stIPInfo, *lpstIPInfo;
 	char			achReqData[8192];
 	WORD			nDataLen = wmtrnet->wmtrdlg->pingsize;
@@ -258,7 +258,7 @@ unsigned WINAPI TraceThread6(void* p)
 		ICMPV6_ECHO_REPLY icmpv6_echo_reply;
 		char achRepData[sizeof(PICMPV6_ECHO_REPLY) + 8192];
 	};
-	
+
 	lpstIPInfo				= &stIPInfo;
 	stIPInfo.Ttl			= (UCHAR)current->ttl;
 	stIPInfo.Tos			= 0;
@@ -503,6 +503,134 @@ void WinMTRNet::AddXmit(int at)
 	ReleaseMutex(ghMutex);
 }
 
+typedef unsigned char byte;
+typedef unsigned int uint;
+#define B2IL(b) (((b)[0] & 0xFF) | (((b)[1] << 8) & 0xFF00) | (((b)[2] << 16) & 0xFF0000) | (((b)[3] << 24) & 0xFF000000))
+#define B2IU(b) (((b)[3] & 0xFF) | (((b)[2] << 8) & 0xFF00) | (((b)[1] << 16) & 0xFF0000) | (((b)[0] << 24) & 0xFF000000))
+
+struct {
+    byte *data;
+    byte *index;
+    uint *flag;
+    uint offset;
+} ipip;
+
+static int ipipdb_destroy() {
+    if (!ipip.offset) {
+        return 0;
+    }
+    free(ipip.flag);
+    free(ipip.index);
+    free(ipip.data);
+    ipip.offset = 0;
+    return 0;
+}
+
+static int ipipdb_init() {
+    if (ipip.offset) {
+        return 0;
+    }
+
+    FILE *file;
+	HMODULE hModule = GetModuleHandle(NULL);
+	TCHAR path[MAX_PATH];
+	GetModuleFileName(hModule, path, MAX_PATH);
+	PathRemoveFileSpec(path);
+	PathAppend(path, _T("17monipdb.datx"));
+	file = _tfopen(path, _T("rb"));
+	if (!file) {
+		file = _tfopen(_T("17monipdb.datx"), _T("rb"));
+	}
+	if (!file) {
+		return 0;
+	}
+    fseek(file, 0, SEEK_END);
+    long size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    ipip.data = (byte *) malloc(size * sizeof(byte));
+    size_t r = fread(ipip.data, sizeof(byte), (size_t) size, file);
+
+    if (r == 0) {
+        return 0;
+    }
+
+    fclose(file);
+
+    uint length = B2IU(ipip.data);
+
+    ipip.index = (byte *) malloc(length * sizeof(byte));
+    memcpy(ipip.index, ipip.data + 4, length);
+
+    ipip.offset = length;
+
+    ipip.flag = (uint *) malloc(65536 * sizeof(uint));
+    memcpy(ipip.flag, ipip.index, 65536 * sizeof(uint));
+
+    return 0;
+}
+
+static int ipipdb_find(const uint ip, char *result) {
+    uint ip_prefix_value = (ip & 0xFF000000) >> 24;
+    uint start = ipip.flag[ip_prefix_value];
+    uint max_comp_len = ipip.offset - 262144 - 4;
+    uint index_offset = 0;
+    uint index_length = 0;
+    for (start = start * 9 + 262144; start < max_comp_len; start += 9) {
+        if (B2IU(ipip.index + start) >= ip) {
+            index_offset = B2IL(ipip.index + start + 4) & 0x00FFFFFF;
+            index_length = (ipip.index[start + 7] << 8) + ipip.index[start + 8];
+            break;
+        }
+    }
+    memcpy(result, ipip.data + ipip.offset + index_offset - 262144, index_length);
+    result[index_length] = '\0';
+	int seeker = 0;
+    for (int i = 0; i < index_length; i++) {
+        if (result[i] == '\t') {
+			result[i] = ' ';
+			seeker++;
+			if (seeker == 5) {
+				result[i] = 0;
+			}
+        }
+    }
+    return 0;
+}
+
+
+static wchar_t * change_encoding_from_UTF8_to_UCS2(char *szU8) {
+    int wcsLen = ::MultiByteToWideChar(CP_UTF8, NULL, szU8, strlen(szU8), NULL, 0);
+    wchar_t* wszString = new wchar_t[wcsLen + 1];
+    ::MultiByteToWideChar(CP_UTF8, NULL, szU8, strlen(szU8), wszString, wcsLen);
+    wszString[wcsLen] = '\0';
+    return wszString;
+}
+
+static char* change_encoding_from_UTF8_to_ANSI(char* szU8) {
+    wchar_t *wszString = change_encoding_from_UTF8_to_UCS2(szU8);
+    int ansiLen = ::WideCharToMultiByte(CP_ACP, NULL, wszString, wcslen(wszString), NULL, 0, NULL, NULL);
+    char* szAnsi = new char[ansiLen + 1];
+    ::WideCharToMultiByte(CP_ACP, NULL, wszString, wcslen(wszString), szAnsi, ansiLen, NULL, NULL);
+    szAnsi[ansiLen] = '\0';
+    delete[] wszString;
+    return szAnsi;
+}
+static LPCTSTR ipip_get_location(uint ip) {
+    ipipdb_init();
+    char buf[192];
+    buf[0] = '\0';
+    strcpy(buf, " [");
+    ipipdb_find(ip, buf + 2);
+    strcat(buf, "]");
+#ifdef _UNICODE
+    return change_encoding_from_UTF8_to_UCS2(buf);
+#else
+    return change_encoding_from_UTF8_to_ANSI(buf);
+#endif
+}
+
+
 void DnsResolverThread(void* p)
 {
 	dns_resolver_thread* dnt=(dns_resolver_thread*)p;
@@ -518,18 +646,14 @@ void DnsResolverThread(void* p)
 		}
 		TRACE_MSG("DNS resolver thread stopped.");
 	}
+	sockaddr *sAddr = wn->GetAddr(dnt->index);
+	if (sAddr->sa_family == AF_INET) {
+		sockaddr_in *sAddr4 = (sockaddr_in *) sAddr;
+		uint realAddr = ntohl(sAddr4->sin_addr.s_addr);
+		LPCTSTR ipGeo = ipip_get_location(realAddr);
+		_tcscat(hostname, ipGeo);
+		delete[] ipGeo;
+		wn->SetName(dnt->index,hostname);
+	}
 	delete p;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-

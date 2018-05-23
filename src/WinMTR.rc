@@ -124,6 +124,8 @@ BEGIN
     LTEXT           "www.winmtr.net",IDC_STATIC,85,21,60,8
     CTEXT           "WinMTR (Redux) is licensed under GPLv2.",IDC_STATIC,2,9,171,8,SS_CENTER
     CTEXT           "https://github.com/White-Tiger/WinMTR",IDC_STATIC,7,57,161,8,SS_CENTER
+    CTEXT           "https://github.com/deamwork/WinMTR",IDC_STATIC,7,82,161,8,SS_CENTER
+    CTEXT           "IPIP-datx support by Kosaka and Jason",IDC_STATIC,7,73,161,8,SS_CENTER
 END
 
 IDD_DIALOG_PROPERTIES DIALOG 0, 0, 282, 160
@@ -278,7 +280,7 @@ END
 STRINGTABLE
 BEGIN
     IDP_SOCKETS_INIT_FAILED "Windows sockets initialization failed."
-    IDS_STRING_SB_NAME      "WinMTR v1.00 GPLv2 (original by Appnor MSP - Fully Managed Hosting & Cloud Provider)"
+    IDS_STRING_SB_NAME      "WinMTR v1.10 GPLv2 (original by Appnor MSP - Fully Managed Hosting & Cloud Provider) ipip.net DATX support"
     IDS_STRING_SB_PING      "0000000"
     IDS_STRING_CLEAR_HISTORY "Clear History"
 END
